@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -14,8 +14,15 @@ export default function Auth() {
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
   const [loading, setLoading] = useState(false);
-  const { signIn, signUp } = useAuth();
+  const { signIn, signUp, user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
+
+  // Redirect if already logged in
+  useEffect(() => {
+    if (!authLoading && user) {
+      navigate('/dashboard');
+    }
+  }, [user, authLoading, navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,7 +42,7 @@ export default function Auth() {
         if (error) {
           toast.error(error.message);
         } else {
-          toast.success('Account created! You can now sign in.');
+          toast.success('Account created successfully!');
           navigate('/dashboard');
         }
       }
@@ -43,6 +50,20 @@ export default function Auth() {
       setLoading(false);
     }
   };
+
+  // Show loading while checking auth status
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="flex items-center gap-3 animate-pulse">
+          <div className="h-10 w-10 rounded-xl bg-primary/20 flex items-center justify-center">
+            <Zap className="h-6 w-6 text-primary" />
+          </div>
+          <span className="text-xl font-semibold">Loading...</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex">

@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/integrations/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -30,46 +31,122 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { toast } from 'sonner';
 
-// Mock data
-const mockProjects = [
-  {
-    id: '1',
-    name: 'Sprint 42',
-    description: 'Q4 feature release sprint - User dashboard improvements',
-    ticketCount: 8,
-    openTickets: 5,
-    createdAt: '2024-12-15',
-  },
-  {
-    id: '2',
-    name: 'Bug Fixes',
-    description: 'Critical bug fixes for production issues',
-    ticketCount: 12,
-    openTickets: 3,
-    createdAt: '2024-12-10',
-  },
-  {
-    id: '3',
-    name: 'QA Testing',
-    description: 'Quality assurance testing cycle for v2.0',
-    ticketCount: 6,
-    openTickets: 6,
-    createdAt: '2024-12-20',
-  },
-];
+interface Project {
+  id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+  ticket_count?: number;
+  open_tickets?: number;
+}
 
 export default function Projects() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, user } = useAuth();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [loading, setLoading] = useState(true);
   const [newProject, setNewProject] = useState({ name: '', description: '' });
+  const [saving, setSaving] = useState(false);
 
-  const handleCreateProject = () => {
-    // TODO: Implement project creation
-    console.log('Creating project:', newProject);
-    setIsDialogOpen(false);
-    setNewProject({ name: '', description: '' });
+  const fetchProjects = async () => {
+    try {
+      const { data: projectsData, error: projectsError } = await supabase
+        .from('projects')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (projectsError) throw projectsError;
+
+      // Fetch ticket counts for each project
+      const projectsWithCounts = await Promise.all(
+        (projectsData || []).map(async (project) => {
+          const { data: tickets } = await supabase
+            .from('tickets')
+            .select('status')
+            .eq('project_id', project.id);
+
+          return {
+            ...project,
+            ticket_count: tickets?.length || 0,
+            open_tickets: tickets?.filter(t => t.status === 'wip' || t.status === 'pending').length || 0,
+          };
+        })
+      );
+
+      setProjects(projectsWithCounts);
+    } catch (error) {
+      console.error('Error fetching projects:', error);
+      toast.error('Failed to load projects');
+    } finally {
+      setLoading(false);
+    }
   };
+
+  useEffect(() => {
+    fetchProjects();
+  }, []);
+
+  const handleCreateProject = async () => {
+    if (!newProject.name.trim()) {
+      toast.error('Please enter a project name');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const { error } = await supabase.from('projects').insert({
+        name: newProject.name,
+        description: newProject.description || null,
+        created_by: user?.id,
+      });
+
+      if (error) throw error;
+
+      toast.success('Project created successfully');
+      setIsDialogOpen(false);
+      setNewProject({ name: '', description: '' });
+      fetchProjects();
+    } catch (error: any) {
+      console.error('Error creating project:', error);
+      toast.error(error.message || 'Failed to create project');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteProject = async (projectId: string) => {
+    if (!confirm('Are you sure you want to delete this project? All associated tickets will be affected.')) {
+      return;
+    }
+
+    try {
+      const { error } = await supabase.from('projects').delete().eq('id', projectId);
+      if (error) throw error;
+
+      toast.success('Project deleted successfully');
+      fetchProjects();
+    } catch (error: any) {
+      console.error('Error deleting project:', error);
+      toast.error(error.message || 'Failed to delete project');
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="p-6 lg:p-8 space-y-6">
+        <div className="animate-pulse space-y-4">
+          <div className="h-8 bg-secondary/50 rounded w-48" />
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="h-48 bg-secondary/50 rounded-lg" />
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 lg:p-8 space-y-6">
@@ -124,8 +201,8 @@ export default function Projects() {
                 <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
                   Cancel
                 </Button>
-                <Button onClick={handleCreateProject}>
-                  Create Project
+                <Button onClick={handleCreateProject} disabled={saving}>
+                  {saving ? 'Creating...' : 'Create Project'}
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -134,70 +211,73 @@ export default function Projects() {
       </div>
 
       {/* Projects Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {mockProjects.map((project, index) => (
-          <Card 
-            key={project.id} 
-            hover 
-            className="animate-fade-in"
-            style={{ animationDelay: `${index * 0.1}s` }}
-          >
-            <CardHeader className="pb-3">
-              <div className="flex items-start justify-between">
-                <div className="space-y-1">
-                  <CardTitle className="text-lg">{project.name}</CardTitle>
-                  <CardDescription className="line-clamp-2">
-                    {project.description}
-                  </CardDescription>
+      {projects.length > 0 ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {projects.map((project, index) => (
+            <Card 
+              key={project.id} 
+              hover 
+              className="animate-fade-in"
+              style={{ animationDelay: `${index * 0.1}s` }}
+            >
+              <CardHeader className="pb-3">
+                <div className="flex items-start justify-between">
+                  <div className="space-y-1">
+                    <CardTitle className="text-lg">{project.name}</CardTitle>
+                    <CardDescription className="line-clamp-2">
+                      {project.description || 'No description'}
+                    </CardDescription>
+                  </div>
+                  {isAdmin && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" size="icon" className="h-8 w-8">
+                          <MoreVertical className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem>
+                          <Edit className="h-4 w-4 mr-2" />
+                          Edit
+                        </DropdownMenuItem>
+                        <DropdownMenuItem 
+                          className="text-destructive"
+                          onClick={() => handleDeleteProject(project.id)}
+                        >
+                          <Trash2 className="h-4 w-4 mr-2" />
+                          Delete
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )}
                 </div>
-                {isAdmin && (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon" className="h-8 w-8">
-                        <MoreVertical className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem>
-                        <Edit className="h-4 w-4 mr-2" />
-                        Edit
-                      </DropdownMenuItem>
-                      <DropdownMenuItem className="text-destructive">
-                        <Trash2 className="h-4 w-4 mr-2" />
-                        Delete
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                )}
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <Ticket className="h-4 w-4" />
-                  <span className="text-sm">{project.ticketCount} tickets</span>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <Ticket className="h-4 w-4" />
+                    <span className="text-sm">{project.ticket_count} tickets</span>
+                  </div>
+                  <Badge 
+                    variant={(project.open_tickets || 0) > 0 ? 'status-wip' : 'status-resolved'}
+                  >
+                    {project.open_tickets} open
+                  </Badge>
                 </div>
-                <Badge 
-                  variant={project.openTickets > 0 ? 'status-wip' : 'status-resolved'}
-                >
-                  {project.openTickets} open
-                </Badge>
-              </div>
-              
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <Calendar className="h-3 w-3" />
-                Created {new Date(project.createdAt).toLocaleDateString()}
-              </div>
+                
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Calendar className="h-3 w-3" />
+                  Created {new Date(project.created_at).toLocaleDateString()}
+                </div>
 
-              <Button variant="outline" className="w-full">
-                View Tickets
-              </Button>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      {mockProjects.length === 0 && (
+                <Button variant="outline" className="w-full">
+                  View Tickets
+                </Button>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      ) : (
         <Card className="py-12">
           <CardContent className="text-center">
             <FolderKanban className="h-12 w-12 mx-auto text-muted-foreground mb-4" />

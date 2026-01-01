@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { supabase } from '@/integrations/supabase/client';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -30,8 +31,8 @@ import {
   AlertTriangle,
   Calendar,
   User,
-  Clock,
 } from 'lucide-react';
+import { toast } from 'sonner';
 
 type TicketStatus = 'wip' | 'pending' | 'resolved' | 'closed';
 type TicketPriority = 'low' | 'medium' | 'high';
@@ -39,67 +40,28 @@ type TicketPriority = 'low' | 'medium' | 'high';
 interface Ticket {
   id: string;
   title: string;
-  description: string;
+  description: string | null;
   status: TicketStatus;
   priority: TicketPriority;
-  projectName: string;
-  assignedTo: string;
-  isCodeRed: boolean;
-  dueDate: string;
-  createdAt: string;
+  project_id: string;
+  assigned_to: string | null;
+  is_code_red: boolean;
+  due_date: string | null;
+  created_at: string;
+  project?: { name: string };
+  assignee?: { email: string; full_name: string | null };
 }
 
-// Mock data
-const mockTickets: Ticket[] = [
-  {
-    id: 'TKT-1001',
-    title: 'Fix authentication redirect loop',
-    description: 'Users are experiencing infinite redirect when logging in via OAuth',
-    status: 'wip',
-    priority: 'high',
-    projectName: 'Bug Fixes',
-    assignedTo: 'john@example.com',
-    isCodeRed: true,
-    dueDate: '2024-12-25',
-    createdAt: '2024-12-20',
-  },
-  {
-    id: 'TKT-1002',
-    title: 'Implement dashboard analytics widget',
-    description: 'Create a new widget showing weekly performance metrics',
-    status: 'pending',
-    priority: 'medium',
-    projectName: 'Sprint 42',
-    assignedTo: 'sarah@example.com',
-    isCodeRed: false,
-    dueDate: '2024-12-28',
-    createdAt: '2024-12-18',
-  },
-  {
-    id: 'TKT-1003',
-    title: 'Update user profile validation',
-    description: 'Add email format validation and phone number verification',
-    status: 'resolved',
-    priority: 'low',
-    projectName: 'Sprint 42',
-    assignedTo: 'mike@example.com',
-    isCodeRed: false,
-    dueDate: '2024-12-30',
-    createdAt: '2024-12-15',
-  },
-  {
-    id: 'TKT-1004',
-    title: 'Database connection timeout issue',
-    description: 'Production database connections timing out during peak hours',
-    status: 'wip',
-    priority: 'high',
-    projectName: 'Bug Fixes',
-    assignedTo: 'john@example.com',
-    isCodeRed: true,
-    dueDate: '2024-12-24',
-    createdAt: '2024-12-21',
-  },
-];
+interface Project {
+  id: string;
+  name: string;
+}
+
+interface Profile {
+  id: string;
+  email: string;
+  full_name: string | null;
+}
 
 const statusConfig = {
   wip: { label: 'Work In Progress', variant: 'status-wip' as const },
@@ -115,17 +77,169 @@ const priorityConfig = {
 };
 
 export default function Tickets() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, user } = useAuth();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [users, setUsers] = useState<Profile[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  
+  const [newTicket, setNewTicket] = useState({
+    title: '',
+    description: '',
+    project_id: '',
+    priority: 'medium' as TicketPriority,
+    assigned_to: '',
+    due_date: '',
+  });
 
-  const filteredTickets = mockTickets.filter((ticket) => {
+  const fetchData = async () => {
+    try {
+      // Fetch tickets with project info
+      const { data: ticketsData, error: ticketsError } = await supabase
+        .from('tickets')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (ticketsError) throw ticketsError;
+
+      // Fetch projects
+      const { data: projectsData, error: projectsError } = await supabase
+        .from('projects')
+        .select('id, name');
+
+      if (projectsError) throw projectsError;
+
+      // Fetch users
+      const { data: usersData, error: usersError } = await supabase
+        .from('profiles')
+        .select('id, email, full_name');
+
+      if (usersError) throw usersError;
+
+      // Map project names and assignee info to tickets
+      const ticketsWithInfo = (ticketsData || []).map(ticket => {
+        const project = projectsData?.find(p => p.id === ticket.project_id);
+        const assignee = usersData?.find(u => u.id === ticket.assigned_to);
+        return {
+          ...ticket,
+          project: project ? { name: project.name } : undefined,
+          assignee: assignee ? { email: assignee.email, full_name: assignee.full_name } : undefined,
+        };
+      });
+
+      setTickets(ticketsWithInfo);
+      setProjects(projectsData || []);
+      setUsers(usersData || []);
+    } catch (error) {
+      console.error('Error fetching data:', error);
+      toast.error('Failed to load tickets');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  const handleCreateTicket = async () => {
+    if (!newTicket.title.trim() || !newTicket.project_id) {
+      toast.error('Please fill in all required fields');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const { error } = await supabase.from('tickets').insert({
+        title: newTicket.title,
+        description: newTicket.description || null,
+        project_id: newTicket.project_id,
+        priority: newTicket.priority,
+        assigned_to: newTicket.assigned_to || null,
+        due_date: newTicket.due_date || null,
+        created_by: user?.id,
+      });
+
+      if (error) throw error;
+
+      toast.success('Ticket created successfully');
+      setIsDialogOpen(false);
+      setNewTicket({
+        title: '',
+        description: '',
+        project_id: '',
+        priority: 'medium',
+        assigned_to: '',
+        due_date: '',
+      });
+      fetchData();
+    } catch (error: any) {
+      console.error('Error creating ticket:', error);
+      toast.error(error.message || 'Failed to create ticket');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleMarkResolved = async (ticketId: string) => {
+    try {
+      const { error } = await supabase
+        .from('tickets')
+        .update({ status: 'resolved', resolved_at: new Date().toISOString() })
+        .eq('id', ticketId);
+
+      if (error) throw error;
+
+      toast.success('Ticket marked as resolved');
+      fetchData();
+    } catch (error: any) {
+      console.error('Error updating ticket:', error);
+      toast.error(error.message || 'Failed to update ticket');
+    }
+  };
+
+  const handleEscalate = async (ticketId: string) => {
+    try {
+      const { error } = await supabase
+        .from('tickets')
+        .update({ is_code_red: true })
+        .eq('id', ticketId);
+
+      if (error) throw error;
+
+      toast.success('Ticket escalated to Code Red');
+      fetchData();
+    } catch (error: any) {
+      console.error('Error escalating ticket:', error);
+      toast.error(error.message || 'Failed to escalate ticket');
+    }
+  };
+
+  const filteredTickets = tickets.filter((ticket) => {
     const matchesSearch = ticket.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
                          ticket.id.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesStatus = statusFilter === 'all' || ticket.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
+
+  if (loading) {
+    return (
+      <div className="p-6 lg:p-8 space-y-6">
+        <div className="animate-pulse space-y-4">
+          <div className="h-8 bg-secondary/50 rounded w-48" />
+          <div className="space-y-4">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="h-24 bg-secondary/50 rounded-lg" />
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 lg:p-8 space-y-6">
@@ -160,30 +274,48 @@ export default function Tickets() {
               </DialogHeader>
               <div className="space-y-4 py-4">
                 <div className="space-y-2">
-                  <Label htmlFor="project">Project</Label>
-                  <Select>
+                  <Label htmlFor="project">Project *</Label>
+                  <Select 
+                    value={newTicket.project_id} 
+                    onValueChange={(value) => setNewTicket({ ...newTicket, project_id: value })}
+                  >
                     <SelectTrigger>
                       <SelectValue placeholder="Select project" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="sprint-42">Sprint 42</SelectItem>
-                      <SelectItem value="bug-fixes">Bug Fixes</SelectItem>
-                      <SelectItem value="qa-testing">QA Testing</SelectItem>
+                      {projects.map((project) => (
+                        <SelectItem key={project.id} value={project.id}>
+                          {project.name}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="title">Title</Label>
-                  <Input id="title" placeholder="Brief description of the issue" />
+                  <Label htmlFor="title">Title *</Label>
+                  <Input 
+                    id="title" 
+                    placeholder="Brief description of the issue"
+                    value={newTicket.title}
+                    onChange={(e) => setNewTicket({ ...newTicket, title: e.target.value })}
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="description">Description</Label>
-                  <Textarea id="description" placeholder="Detailed description..." />
+                  <Textarea 
+                    id="description" 
+                    placeholder="Detailed description..."
+                    value={newTicket.description}
+                    onChange={(e) => setNewTicket({ ...newTicket, description: e.target.value })}
+                  />
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Priority</Label>
-                    <Select>
+                    <Select 
+                      value={newTicket.priority} 
+                      onValueChange={(value: TicketPriority) => setNewTicket({ ...newTicket, priority: value })}
+                    >
                       <SelectTrigger>
                         <SelectValue placeholder="Select priority" />
                       </SelectTrigger>
@@ -196,29 +328,39 @@ export default function Tickets() {
                   </div>
                   <div className="space-y-2">
                     <Label>Assign To</Label>
-                    <Select>
+                    <Select 
+                      value={newTicket.assigned_to} 
+                      onValueChange={(value) => setNewTicket({ ...newTicket, assigned_to: value })}
+                    >
                       <SelectTrigger>
                         <SelectValue placeholder="Select user" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="john">John Doe</SelectItem>
-                        <SelectItem value="sarah">Sarah Smith</SelectItem>
-                        <SelectItem value="mike">Mike Johnson</SelectItem>
+                        {users.map((user) => (
+                          <SelectItem key={user.id} value={user.id}>
+                            {user.full_name || user.email}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="dueDate">Due Date</Label>
-                  <Input id="dueDate" type="date" />
+                  <Input 
+                    id="dueDate" 
+                    type="date"
+                    value={newTicket.due_date}
+                    onChange={(e) => setNewTicket({ ...newTicket, due_date: e.target.value })}
+                  />
                 </div>
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
                   Cancel
                 </Button>
-                <Button onClick={() => setIsDialogOpen(false)}>
-                  Create Ticket
+                <Button onClick={handleCreateTicket} disabled={saving}>
+                  {saving ? 'Creating...' : 'Create Ticket'}
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -254,76 +396,95 @@ export default function Tickets() {
 
       {/* Tickets List */}
       <div className="space-y-4">
-        {filteredTickets.map((ticket, index) => (
-          <Card 
-            key={ticket.id} 
-            hover 
-            codeRed={ticket.isCodeRed}
-            className="animate-fade-in"
-            style={{ animationDelay: `${index * 0.05}s` }}
-          >
-            <CardContent className="p-4">
-              <div className="flex flex-col lg:flex-row lg:items-center gap-4">
-                {/* Ticket Info */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-sm font-mono text-muted-foreground">{ticket.id}</span>
-                    {ticket.isCodeRed && (
-                      <Badge variant="code-red" className="gap-1">
-                        <AlertTriangle className="h-3 w-3" />
-                        Code Red
-                      </Badge>
+        {filteredTickets.length > 0 ? (
+          filteredTickets.map((ticket, index) => (
+            <Card 
+              key={ticket.id} 
+              hover 
+              codeRed={ticket.is_code_red}
+              className="animate-fade-in"
+              style={{ animationDelay: `${index * 0.05}s` }}
+            >
+              <CardContent className="p-4">
+                <div className="flex flex-col lg:flex-row lg:items-center gap-4">
+                  {/* Ticket Info */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-sm font-mono text-muted-foreground">
+                        {ticket.id.slice(0, 8)}
+                      </span>
+                      {ticket.is_code_red && (
+                        <Badge variant="code-red" className="gap-1">
+                          <AlertTriangle className="h-3 w-3" />
+                          Code Red
+                        </Badge>
+                      )}
+                    </div>
+                    <h3 className="font-semibold text-lg truncate">{ticket.title}</h3>
+                    <p className="text-sm text-muted-foreground line-clamp-1 mt-1">
+                      {ticket.description || 'No description'}
+                    </p>
+                    {ticket.project && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Project: {ticket.project.name}
+                      </p>
                     )}
                   </div>
-                  <h3 className="font-semibold text-lg truncate">{ticket.title}</h3>
-                  <p className="text-sm text-muted-foreground line-clamp-1 mt-1">
-                    {ticket.description}
-                  </p>
-                </div>
 
-                {/* Meta Info */}
-                <div className="flex flex-wrap items-center gap-3 text-sm">
-                  <Badge variant={priorityConfig[ticket.priority].variant}>
-                    {priorityConfig[ticket.priority].label}
-                  </Badge>
-                  <Badge variant={statusConfig[ticket.status].variant}>
-                    {statusConfig[ticket.status].label}
-                  </Badge>
-                  
-                  <div className="flex items-center gap-1 text-muted-foreground">
-                    <User className="h-3 w-3" />
-                    <span>{ticket.assignedTo.split('@')[0]}</span>
+                  {/* Meta Info */}
+                  <div className="flex flex-wrap items-center gap-3 text-sm">
+                    <Badge variant={priorityConfig[ticket.priority].variant}>
+                      {priorityConfig[ticket.priority].label}
+                    </Badge>
+                    <Badge variant={statusConfig[ticket.status].variant}>
+                      {statusConfig[ticket.status].label}
+                    </Badge>
+                    
+                    {ticket.assignee && (
+                      <div className="flex items-center gap-1 text-muted-foreground">
+                        <User className="h-3 w-3" />
+                        <span>{ticket.assignee.full_name || ticket.assignee.email.split('@')[0]}</span>
+                      </div>
+                    )}
+                    
+                    {ticket.due_date && (
+                      <div className="flex items-center gap-1 text-muted-foreground">
+                        <Calendar className="h-3 w-3" />
+                        <span>{new Date(ticket.due_date).toLocaleDateString()}</span>
+                      </div>
+                    )}
                   </div>
-                  
-                  <div className="flex items-center gap-1 text-muted-foreground">
-                    <Calendar className="h-3 w-3" />
-                    <span>{new Date(ticket.dueDate).toLocaleDateString()}</span>
+
+                  {/* Actions */}
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm">
+                      View
+                    </Button>
+                    {!isAdmin && ticket.status !== 'resolved' && ticket.status !== 'closed' && (
+                      <Button 
+                        variant="success" 
+                        size="sm"
+                        onClick={() => handleMarkResolved(ticket.id)}
+                      >
+                        Mark Resolved
+                      </Button>
+                    )}
+                    {!isAdmin && !ticket.is_code_red && ticket.status !== 'closed' && (
+                      <Button 
+                        variant="code-red" 
+                        size="sm"
+                        onClick={() => handleEscalate(ticket.id)}
+                      >
+                        <AlertTriangle className="h-3 w-3 mr-1" />
+                        Escalate
+                      </Button>
+                    )}
                   </div>
                 </div>
-
-                {/* Actions */}
-                <div className="flex gap-2">
-                  <Button variant="outline" size="sm">
-                    View
-                  </Button>
-                  {!isAdmin && ticket.status !== 'resolved' && ticket.status !== 'closed' && (
-                    <Button variant="success" size="sm">
-                      Mark Resolved
-                    </Button>
-                  )}
-                  {!isAdmin && !ticket.isCodeRed && (
-                    <Button variant="code-red" size="sm">
-                      <AlertTriangle className="h-3 w-3 mr-1" />
-                      Escalate
-                    </Button>
-                  )}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-
-        {filteredTickets.length === 0 && (
+              </CardContent>
+            </Card>
+          ))
+        ) : (
           <Card className="py-12">
             <CardContent className="text-center">
               <TicketIcon className="h-12 w-12 mx-auto text-muted-foreground mb-4" />

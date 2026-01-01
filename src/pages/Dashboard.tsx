@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/integrations/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -13,18 +15,103 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
+interface DashboardStats {
+  totalTickets: number;
+  openTickets: number;
+  resolvedTickets: number;
+  overdueTickets: number;
+  codeRedCount: number;
+  projectCount: number;
+}
+
+interface RecentActivity {
+  id: string;
+  action: string;
+  ticket_id: string;
+  created_at: string;
+}
+
 export default function Dashboard() {
   const { user, isAdmin } = useAuth();
+  const [stats, setStats] = useState<DashboardStats>({
+    totalTickets: 0,
+    openTickets: 0,
+    resolvedTickets: 0,
+    overdueTickets: 0,
+    codeRedCount: 0,
+    projectCount: 0,
+  });
+  const [recentActivity, setRecentActivity] = useState<RecentActivity[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  // Mock data - will be replaced with real data from Supabase
-  const stats = {
-    totalTickets: 24,
-    openTickets: 12,
-    resolvedTickets: 8,
-    overdueTickets: 4,
-    codeRedCount: 2,
-    projectCount: 5,
-  };
+  useEffect(() => {
+    const fetchDashboardData = async () => {
+      if (!user) return;
+      
+      try {
+        // Fetch tickets
+        const { data: tickets, error: ticketsError } = await supabase
+          .from('tickets')
+          .select('*');
+        
+        if (ticketsError) throw ticketsError;
+
+        // Fetch projects
+        const { data: projects, error: projectsError } = await supabase
+          .from('projects')
+          .select('id');
+        
+        if (projectsError) throw projectsError;
+
+        // Fetch recent activity
+        const { data: activity, error: activityError } = await supabase
+          .from('ticket_activity')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(3);
+
+        if (activityError) throw activityError;
+
+        // Calculate stats
+        const now = new Date();
+        const ticketsList = tickets || [];
+        
+        setStats({
+          totalTickets: ticketsList.length,
+          openTickets: ticketsList.filter(t => t.status === 'wip' || t.status === 'pending').length,
+          resolvedTickets: ticketsList.filter(t => t.status === 'resolved').length,
+          overdueTickets: ticketsList.filter(t => 
+            t.due_date && new Date(t.due_date) < now && t.status !== 'closed'
+          ).length,
+          codeRedCount: ticketsList.filter(t => t.is_code_red && t.status !== 'closed').length,
+          projectCount: (projects || []).length,
+        });
+
+        setRecentActivity(activity || []);
+      } catch (error) {
+        console.error('Error fetching dashboard data:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchDashboardData();
+  }, [user]);
+
+  if (loading) {
+    return (
+      <div className="p-6 lg:p-8 space-y-8">
+        <div className="animate-pulse space-y-4">
+          <div className="h-8 bg-secondary/50 rounded w-64" />
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className="h-32 bg-secondary/50 rounded-lg" />
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 lg:p-8 space-y-8">
@@ -161,22 +248,27 @@ export default function Dashboard() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="space-y-4">
-              {[1, 2, 3].map((i) => (
-                <div key={i} className="flex items-start gap-3 p-3 rounded-lg bg-secondary/30">
-                  <div className="h-8 w-8 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
-                    <Ticket className="h-4 w-4 text-primary" />
+            {recentActivity.length > 0 ? (
+              <div className="space-y-4">
+                {recentActivity.map((activity) => (
+                  <div key={activity.id} className="flex items-start gap-3 p-3 rounded-lg bg-secondary/30">
+                    <div className="h-8 w-8 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
+                      <Ticket className="h-4 w-4 text-primary" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium">{activity.action}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {new Date(activity.created_at).toLocaleDateString()}
+                      </p>
+                    </div>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium">Ticket #{1000 + i} updated</p>
-                    <p className="text-xs text-muted-foreground">
-                      Status changed to <Badge variant="status-pending" className="ml-1">Pending</Badge>
-                    </p>
-                  </div>
-                  <span className="text-xs text-muted-foreground">2h ago</span>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-muted-foreground text-sm text-center py-4">
+                No recent activity
+              </p>
+            )}
           </CardContent>
         </Card>
 
@@ -191,14 +283,14 @@ export default function Dashboard() {
                 <Link to="/dashboard/projects" className="block">
                   <Button variant="outline" className="w-full justify-start">
                     <FolderKanban className="h-4 w-4 mr-2" />
-                    Create New Project
+                    Manage Projects
                     <ArrowRight className="h-4 w-4 ml-auto" />
                   </Button>
                 </Link>
                 <Link to="/dashboard/tickets" className="block">
                   <Button variant="outline" className="w-full justify-start">
                     <Ticket className="h-4 w-4 mr-2" />
-                    Create New Ticket
+                    Manage Tickets
                     <ArrowRight className="h-4 w-4 ml-auto" />
                   </Button>
                 </Link>
