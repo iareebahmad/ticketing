@@ -41,7 +41,7 @@ export default function DashboardLayout() {
             <SidebarTrigger />
             <div className="flex items-center gap-2">
               <Zap className="h-5 w-5 text-primary" />
-              <span className="font-semibold">FoundrFuse</span>
+              <span className="font-semibold">ITS</span>
             </div>
           </header>
           <div className="flex-1 overflow-auto">

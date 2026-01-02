@@ -66,7 +66,7 @@ export function AppSidebar() {
             <Zap className="h-5 w-5 text-primary" />
           </div>
           {!collapsed && (
-            <span className="font-bold text-lg gradient-text">FoundrFuse</span>
+            <span className="font-bold text-lg gradient-text">ITS</span>
           )}
         </Link>
       </div>
