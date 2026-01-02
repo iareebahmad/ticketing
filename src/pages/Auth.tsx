@@ -77,7 +77,7 @@ export default function Auth() {
             <div className="h-12 w-12 rounded-xl bg-primary/20 flex items-center justify-center">
               <Zap className="h-7 w-7 text-primary" />
             </div>
-            <span className="text-3xl font-bold gradient-text">FoundrFuse</span>
+            <span className="text-3xl font-bold gradient-text">ITS</span>
           </div>
           
           <h1 className="text-4xl xl:text-5xl font-bold mb-6 leading-tight">
@@ -122,7 +122,7 @@ export default function Auth() {
             <div className="h-10 w-10 rounded-xl bg-primary/20 flex items-center justify-center">
               <Zap className="h-6 w-6 text-primary" />
             </div>
-            <span className="text-2xl font-bold gradient-text">FoundrFuse</span>
+            <span className="text-2xl font-bold gradient-text">ITS</span>
           </div>
 
           <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
@@ -133,7 +133,7 @@ export default function Auth() {
               <CardDescription>
                 {isLogin 
                   ? 'Sign in to access your dashboard' 
-                  : 'Get started with FoundrFuse ticketing'}
+                  : 'Get started with ITS'}
               </CardDescription>
             </CardHeader>
             <CardContent>
